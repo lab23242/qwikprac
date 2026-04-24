@@ -1,0 +1,10 @@
+solana>=0.34.3
+solders>=0.21.0
+anchorpy>=0.20.1
+websockets>=12.0
+aiohttp>=3.9.5
+base58>=2.1.1
+python-dotenv>=1.0.1
+construct>=2.10.70
+borsh-construct>=0.1.0
+asyncio>=3.4.3
