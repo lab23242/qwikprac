@@ -94,8 +94,23 @@ async def evaluate_and_snipe(
             social_ok,
         )
 
-        # Fetch bonding curve for price calculation (best-effort, don't block)
+        # Fetch bonding curve for price calculation and market cap filter
         bc = await fetch_bonding_curve(event.mint, session)
+
+        if bc:
+            mc = bc.market_cap_sol()
+            if config.MIN_MARKET_CAP_SOL > 0 and mc < config.MIN_MARKET_CAP_SOL:
+                log.info(
+                    "  SKIP %s: market cap %.2f SOL below min %.2f SOL",
+                    mint_str[:8], mc, config.MIN_MARKET_CAP_SOL,
+                )
+                return
+            if config.MAX_MARKET_CAP_SOL > 0 and mc > config.MAX_MARKET_CAP_SOL:
+                log.info(
+                    "  SKIP %s: market cap %.2f SOL above max %.2f SOL",
+                    mint_str[:8], mc, config.MAX_MARKET_CAP_SOL,
+                )
+                return
 
         sig = await snipe(
             keypair=keypair,
@@ -118,10 +133,13 @@ async def _always_true() -> bool:
 async def main() -> None:
     log.info("=== pump.fun memecoin sniper starting ===")
     log.info(
-        "Filters: min_migration=%.0f%% | min_tokens=%d | require_social=%s",
+        "Filters: min_migration=%.0f%% | min_tokens=%d | require_social=%s | "
+        "mcap_sol=[%.1f, %s]",
         config.MIN_MIGRATION_RATE * 100,
         config.MIN_TOKENS_LAUNCHED,
         config.REQUIRE_SOCIAL,
+        config.MIN_MARKET_CAP_SOL,
+        f"{config.MAX_MARKET_CAP_SOL:.1f}" if config.MAX_MARKET_CAP_SOL > 0 else "∞",
     )
     log.info(
         "Buy: %.4f SOL | slippage=%.0f%% | priority=%d µL | jito=%s",

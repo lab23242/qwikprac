@@ -24,6 +24,9 @@ USE_JITO = os.getenv("USE_JITO", "true").lower() == "true"
 MIN_MIGRATION_RATE = float(os.getenv("MIN_MIGRATION_RATE", "0.5"))
 MIN_TOKENS_LAUNCHED = int(os.getenv("MIN_TOKENS_LAUNCHED", "3"))
 REQUIRE_SOCIAL = os.getenv("REQUIRE_SOCIAL", "true").lower() == "true"
+# Market cap limits in SOL (0 = disabled)
+MIN_MARKET_CAP_SOL = float(os.getenv("MIN_MARKET_CAP_SOL", "0"))
+MAX_MARKET_CAP_SOL = float(os.getenv("MAX_MARKET_CAP_SOL", "0"))
 
 # --- Buy parameters ---
 BUY_AMOUNT_SOL = float(os.getenv("BUY_AMOUNT_SOL", "0.1"))

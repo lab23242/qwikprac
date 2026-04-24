@@ -158,7 +158,7 @@ def _extract_mint_from_tx(tx: dict, creator: str) -> Optional[str]:
 
 
 async def _count_migrations(mints: list[str], session: aiohttp.ClientSession) -> int:
-    """Check how many bonding curves have complete=True (migrated to Raydium)."""
+    """Check how many bonding curves have complete=True (migrated off pump.fun)."""
     tasks = [_is_migrated(mint, session) for mint in mints]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     return sum(1 for r in results if r is True)

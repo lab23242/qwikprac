@@ -91,6 +91,13 @@ class BondingCurve:
             return 0.0
         return self.virtual_sol_reserves / self.virtual_token_reserves / 1e9
 
+    def market_cap_sol(self) -> float:
+        """Fully-diluted market cap in SOL (price × total supply)."""
+        if self.virtual_token_reserves == 0:
+            return 0.0
+        price_lamports = self.virtual_sol_reserves / self.virtual_token_reserves
+        return price_lamports * self.token_total_supply / 1e9
+
     def tokens_for_sol(self, sol_amount: float) -> int:
         """Constant-product AMM: how many tokens for `sol_amount` SOL."""
         sol_in = int(sol_amount * 1e9)
