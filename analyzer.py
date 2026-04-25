@@ -82,14 +82,22 @@ async def _get_creator_signatures(creator: str, session: aiohttp.ClientSession) 
     Fetch the creator's own transaction history.
     Previously this queried PUMP_PROGRAM_ID (returning arbitrary users' txns).
     """
-    payload = {
+    payload = orjson.dumps({
         "jsonrpc": "2.0", "id": 1,
         "method": "getSignaturesForAddress",
         "params": [creator, {"limit": 1000, "commitment": "confirmed"}],
-    }
+    })
     try:
-        async with session.post(RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as r:
-            data = orjson.loads(await r.read())
+        async with session.post(
+            RPC_URL, content=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as r:
+            body = await r.read()
+            if r.status != 200:
+                log.debug("getSignaturesForAddress HTTP %d for %s", r.status, creator[:8])
+                return []
+            data = orjson.loads(body)
             return [s["signature"] for s in data.get("result", []) if not s.get("err")]
     except Exception as exc:
         log.warning("getSignaturesForAddress failed for %s: %s", creator[:8], exc)
