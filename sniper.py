@@ -10,7 +10,7 @@ import sys
 import aiohttp
 from solders.keypair import Keypair
 import base58
-import uvloop
+import winloop
 
 import config
 from monitor import stream_create_events
@@ -128,6 +128,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        uvloop.run(main())
+        winloop.run(main())
     except KeyboardInterrupt:
         log.info("Sniper stopped")
