@@ -1,13 +1,13 @@
 """
 WebSocket monitor: subscribes to pump.fun program logs and emits CreateEvents
-as fast as possible using 'processed' commitment.
+at processed commitment (fastest possible finality tier).
 """
 import asyncio
 import base64
-import json
 import logging
 from typing import AsyncIterator
 
+import orjson
 import websockets
 
 from config import RPC_WS_URL
@@ -15,7 +15,12 @@ from pumpfun import PUMP_PROGRAM_ID, CREATE_EVENT_DISCRIMINATOR, CreateEvent
 
 log = logging.getLogger(__name__)
 
-SUBSCRIBE_MSG = json.dumps({
+# Pre-compute constants used in the hot-path message parser
+_DATA_PREFIX     = "Program data: "
+_DATA_PREFIX_LEN = len(_DATA_PREFIX)
+_DISCRIMINATOR   = CREATE_EVENT_DISCRIMINATOR  # bytes, pre-imported
+
+_SUBSCRIBE_BYTES = orjson.dumps({
     "jsonrpc": "2.0",
     "id": 1,
     "method": "logsSubscribe",
@@ -27,10 +32,7 @@ SUBSCRIBE_MSG = json.dumps({
 
 
 async def stream_create_events() -> AsyncIterator[CreateEvent]:
-    """
-    Yield CreateEvent objects as new pump.fun tokens are launched.
-    Reconnects automatically on disconnect.
-    """
+    """Yield CreateEvents for every new pump.fun token launch. Auto-reconnects."""
     backoff = 1
     while True:
         try:
@@ -39,41 +41,41 @@ async def stream_create_events() -> AsyncIterator[CreateEvent]:
                 ping_interval=20,
                 ping_timeout=30,
                 max_size=10 * 1024 * 1024,
+                open_timeout=15,
             ) as ws:
-                await ws.send(SUBSCRIBE_MSG)
-                log.info("WebSocket connected; subscribed to pump.fun logs")
+                await ws.send(_SUBSCRIBE_BYTES)
+                log.info("WebSocket connected — subscribed to pump.fun logs")
                 backoff = 1
 
                 async for raw in ws:
-                    msg = json.loads(raw)
-                    event = _parse_message(msg)
+                    event = _parse(raw)
                     if event:
                         yield event
 
-        except (websockets.ConnectionClosed, ConnectionResetError, OSError) as exc:
+        except (websockets.ConnectionClosed, websockets.InvalidStatus,
+                ConnectionResetError, OSError) as exc:
             log.warning("WS disconnected (%s); reconnecting in %ds", exc, backoff)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
         except Exception as exc:
-            log.error("Unexpected WS error: %s", exc, exc_info=True)
+            log.error("WS error: %s", exc, exc_info=True)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30)
 
 
-def _parse_message(msg: dict) -> CreateEvent | None:
+def _parse(raw: str | bytes) -> CreateEvent | None:
     try:
+        msg  = orjson.loads(raw)
         logs: list[str] = msg["params"]["result"]["value"]["logs"]
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, orjson.JSONDecodeError):
         return None
 
     for line in logs:
-        if not line.startswith("Program data: "):
+        # Fast prefix check before any allocation
+        if line[:_DATA_PREFIX_LEN] != _DATA_PREFIX:
             continue
-        raw = base64.b64decode(line[len("Program data: "):])
-        if len(raw) < 8:
-            continue
-        if raw[:8] != CREATE_EVENT_DISCRIMINATOR:
-            continue
-        return CreateEvent.decode(raw)
+        data = base64.b64decode(line[_DATA_PREFIX_LEN:])
+        if len(data) >= 8 and data[:8] == _DISCRIMINATOR:
+            return CreateEvent.decode(data)
 
     return None

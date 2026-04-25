@@ -1,154 +1,157 @@
 """
-Developer analysis: computes migration rate and past token count for a creator,
-and checks token metadata for social media links.
-Both results are cached with a short TTL to avoid redundant RPC calls.
+Developer analysis: migration rate + token count for a creator wallet,
+and social-media link check from token metadata URI.
+Results are TTL-cached to avoid redundant RPC calls on the critical path.
+
+Key fix: getSignaturesForAddress queries the CREATOR address (not the pump.fun
+program), then JSON-RPC batches getTransaction to find pump.fun creates.
+Migration checks use getMultipleAccounts (one round-trip per 100 tokens).
 """
 import asyncio
+import base64
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
+import orjson
 
 from config import RPC_URL
-from pumpfun import PUMP_PROGRAM_ID, get_bonding_curve_pda, BondingCurve
+from pumpfun import PUMP_PROGRAM_ID, BondingCurve, get_bonding_curve_pda
 
 log = logging.getLogger(__name__)
 
-_dev_cache: dict[str, tuple[float, "DevStats"]] = {}  # pubkey -> (timestamp, stats)
-_DEV_CACHE_TTL = 300  # seconds
-
-_meta_cache: dict[str, tuple[float, bool]] = {}  # uri -> (timestamp, has_social)
+_dev_cache:  dict[str, tuple[float, "DevStats"]] = {}
+_meta_cache: dict[str, tuple[float, bool]]       = {}
+_DEV_CACHE_TTL  = 300   # seconds
 _META_CACHE_TTL = 60
 
 
 @dataclass
 class DevStats:
-    tokens_launched: int = 0
-    tokens_migrated: int = 0
-    migration_rate: float = 0.0
+    tokens_launched: int  = 0
+    tokens_migrated: int  = 0
+    migration_rate:  float = 0.0
 
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 async def get_dev_stats(creator: str, session: aiohttp.ClientSession) -> DevStats:
-    """Return cached-or-fresh stats for a developer wallet."""
-    now = time.monotonic()
+    now    = time.monotonic()
     cached = _dev_cache.get(creator)
     if cached and (now - cached[0]) < _DEV_CACHE_TTL:
         return cached[1]
-
     stats = await _fetch_dev_stats(creator, session)
     _dev_cache[creator] = (now, stats)
     return stats
 
 
+async def has_social_media(uri: str, session: aiohttp.ClientSession) -> bool:
+    if not uri:
+        return False
+    now    = time.monotonic()
+    cached = _meta_cache.get(uri)
+    if cached and (now - cached[0]) < _META_CACHE_TTL:
+        return cached[1]
+    result = await _fetch_social(uri, session)
+    _meta_cache[uri] = (now, result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Developer stats
+# ---------------------------------------------------------------------------
+
 async def _fetch_dev_stats(creator: str, session: aiohttp.ClientSession) -> DevStats:
-    """
-    Fetch all signatures where the creator used the pump.fun program,
-    then count migrations by checking bonding curve `complete` flag.
-    """
-    sigs = await _get_signatures(creator, session)
+    sigs = await _get_creator_signatures(creator, session)
     if not sigs:
         return DevStats()
-
-    # Collect mints from create instructions in those transactions
-    mints = await _get_created_mints(creator, sigs, session)
+    mints = await _extract_created_mints(creator, sigs, session)
     if not mints:
         return DevStats()
-
-    # Check migration status for all mints concurrently
-    migrated = await _count_migrations(mints, session)
-    rate = migrated / len(mints) if mints else 0.0
+    migrated = await _count_migrations_batch(mints, session)
+    rate = migrated / len(mints)
     return DevStats(tokens_launched=len(mints), tokens_migrated=migrated, migration_rate=rate)
 
 
-async def _get_signatures(creator: str, session: aiohttp.ClientSession) -> list[str]:
-    """Fetch up to 1000 signatures for the creator <> pump.fun interaction."""
+async def _get_creator_signatures(creator: str, session: aiohttp.ClientSession) -> list[str]:
+    """
+    Fetch the creator's own transaction history.
+    Previously this queried PUMP_PROGRAM_ID (returning arbitrary users' txns).
+    """
     payload = {
         "jsonrpc": "2.0", "id": 1,
         "method": "getSignaturesForAddress",
-        "params": [
-            str(PUMP_PROGRAM_ID),
-            {"limit": 1000, "commitment": "confirmed"},
-        ],
+        "params": [creator, {"limit": 1000, "commitment": "confirmed"}],
     }
     try:
         async with session.post(RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as r:
-            data = await r.json()
-            sigs = [s["signature"] for s in data.get("result", [])]
-            return sigs
+            data = orjson.loads(await r.read())
+            return [s["signature"] for s in data.get("result", []) if not s.get("err")]
     except Exception as exc:
-        log.warning("getSignaturesForAddress failed for %s: %s", creator, exc)
+        log.warning("getSignaturesForAddress failed for %s: %s", creator[:8], exc)
         return []
 
 
-async def _get_created_mints(
+async def _extract_created_mints(
     creator: str, signatures: list[str], session: aiohttp.ClientSession
 ) -> list[str]:
-    """
-    Fetch transactions in batches and extract mint addresses from
-    pump.fun create instructions authored by `creator`.
-    """
+    """Batch-fetch transactions (JSON-RPC batch) and extract pump.fun create mints."""
     mints: list[str] = []
-    batch_size = 50
+    batch_size = 50  # keep request size manageable
 
     for i in range(0, min(len(signatures), 500), batch_size):
         batch = signatures[i:i + batch_size]
-        tasks = [_parse_create_tx(sig, creator, session) for sig in batch]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, str):
-                mints.append(r)
+        rpc_batch = [
+            {
+                "jsonrpc": "2.0", "id": idx,
+                "method": "getTransaction",
+                "params": [
+                    sig,
+                    {"encoding": "jsonParsed", "commitment": "confirmed",
+                     "maxSupportedTransactionVersion": 0},
+                ],
+            }
+            for idx, sig in enumerate(batch)
+        ]
+        try:
+            async with session.post(
+                RPC_URL, content=orjson.dumps(rpc_batch),
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as r:
+                results = orjson.loads(await r.read())
+                for item in results:
+                    tx = item.get("result")
+                    if tx:
+                        m = _extract_mint(tx, creator)
+                        if m:
+                            mints.append(m)
+        except Exception as exc:
+            log.debug("batch getTransaction error: %s", exc)
 
     return mints
 
 
-async def _parse_create_tx(
-    sig: str, creator: str, session: aiohttp.ClientSession
-) -> Optional[str]:
-    """Return the mint address if this tx is a pump.fun create by `creator`."""
-    payload = {
-        "jsonrpc": "2.0", "id": 1,
-        "method": "getTransaction",
-        "params": [sig, {"encoding": "jsonParsed", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}],
-    }
+def _extract_mint(tx: dict, creator: str) -> Optional[str]:
     try:
-        async with session.post(RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=8)) as r:
-            data = await r.json()
-            tx = data.get("result")
-            if not tx:
-                return None
-            return _extract_mint_from_tx(tx, creator)
-    except Exception:
-        return None
-
-
-def _extract_mint_from_tx(tx: dict, creator: str) -> Optional[str]:
-    """
-    Heuristic: find a create instruction to pump.fun from `creator`.
-    The mint is the first new account key not in common programs.
-    We look for the account that becomes a new Token Mint in the tx.
-    """
-    try:
-        meta = tx.get("meta", {})
-        if meta.get("err"):
+        if tx.get("meta", {}).get("err"):
             return None
         msg = tx["transaction"]["message"]
-        # Fee payer must be creator
-        account_keys = msg["accountKeys"]
-        if account_keys[0]["pubkey"] != creator:
+        if msg["accountKeys"][0]["pubkey"] != creator:
             return None
-        # Look for a pump.fun instruction
+        pump_str = str(PUMP_PROGRAM_ID)
         for ix in msg.get("instructions", []):
-            if ix.get("programId") == str(PUMP_PROGRAM_ID):
-                # The mint is typically the 3rd account in create (after global, payer)
+            if ix.get("programId") == pump_str:
                 accs = ix.get("accounts", [])
                 if len(accs) >= 3:
-                    return accs[2]  # mint position in create instruction
-        # Also check inner instructions
-        for inner_group in meta.get("innerInstructions", []):
-            for ix in inner_group.get("instructions", []):
-                if ix.get("programId") == str(PUMP_PROGRAM_ID):
+                    return accs[2]
+        for group in tx.get("meta", {}).get("innerInstructions", []):
+            for ix in group.get("instructions", []):
+                if ix.get("programId") == pump_str:
                     accs = ix.get("accounts", [])
                     if len(accs) >= 3:
                         return accs[2]
@@ -157,66 +160,54 @@ def _extract_mint_from_tx(tx: dict, creator: str) -> Optional[str]:
     return None
 
 
-async def _count_migrations(mints: list[str], session: aiohttp.ClientSession) -> int:
-    """Check how many bonding curves have complete=True (migrated off pump.fun)."""
-    tasks = [_is_migrated(mint, session) for mint in mints]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return sum(1 for r in results if r is True)
+async def _count_migrations_batch(mints: list[str], session: aiohttp.ClientSession) -> int:
+    """
+    Check migration status for all mints in one getMultipleAccounts call per 100.
+    complete=True or account closed both count as migrated.
+    """
+    from solders.pubkey import Pubkey
+    pdas = [str(get_bonding_curve_pda(Pubkey.from_string(m))) for m in mints]
+    migrated = 0
 
-
-async def _is_migrated(mint_str: str, session: aiohttp.ClientSession) -> bool:
-    try:
-        from solders.pubkey import Pubkey
-        mint = Pubkey.from_string(mint_str)
-        bc_pda = get_bonding_curve_pda(mint)
+    for i in range(0, len(pdas), 100):
+        batch_pdas = pdas[i:i + 100]
         payload = {
             "jsonrpc": "2.0", "id": 1,
-            "method": "getAccountInfo",
-            "params": [str(bc_pda), {"encoding": "base64", "commitment": "confirmed"}],
+            "method": "getMultipleAccounts",
+            "params": [batch_pdas, {"encoding": "base64", "commitment": "confirmed"}],
         }
-        async with session.post(RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=6)) as r:
-            data = await r.json()
-            result = data.get("result", {})
-            if result is None or result.get("value") is None:
-                # Account closed = migrated
-                return True
-            raw = result["value"]["data"]
-            if isinstance(raw, list):
-                import base64 as _b64
-                bc_data = _b64.b64decode(raw[0])
-            else:
-                return False
-            bc = BondingCurve.decode(bc_data)
-            return bc.complete if bc else False
-    except Exception:
-        return False
+        try:
+            async with session.post(
+                RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+            ) as r:
+                data    = orjson.loads(await r.read())
+                accounts = data["result"]["value"]
+                for acct in accounts:
+                    if acct is None:
+                        migrated += 1          # account closed → migrated
+                    else:
+                        bc_bytes = base64.b64decode(acct["data"][0])
+                        bc = BondingCurve.decode(bc_bytes)
+                        if bc and bc.complete:
+                            migrated += 1
+        except Exception as exc:
+            log.warning("getMultipleAccounts migration check failed: %s", exc)
+
+    return migrated
 
 
-async def has_social_media(uri: str, session: aiohttp.ClientSession) -> bool:
-    """Fetch token metadata URI and check for twitter/telegram/website fields."""
-    if not uri:
-        return False
-
-    now = time.monotonic()
-    cached = _meta_cache.get(uri)
-    if cached and (now - cached[0]) < _META_CACHE_TTL:
-        return cached[1]
-
-    result = await _fetch_social(uri, session)
-    _meta_cache[uri] = (now, result)
-    return result
-
+# ---------------------------------------------------------------------------
+# Social media
+# ---------------------------------------------------------------------------
 
 async def _fetch_social(uri: str, session: aiohttp.ClientSession) -> bool:
-    # Resolve IPFS URIs via public gateway
     url = _resolve_uri(uri)
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as r:
             if r.status != 200:
                 return False
-            meta = await r.json(content_type=None)
-            social_fields = ("twitter", "telegram", "website", "discord", "x")
-            return any(meta.get(f) for f in social_fields)
+            meta = orjson.loads(await r.read())
+            return any(meta.get(f) for f in ("twitter", "telegram", "website", "discord", "x"))
     except Exception as exc:
         log.debug("metadata fetch failed for %s: %s", uri, exc)
         return False
@@ -225,6 +216,4 @@ async def _fetch_social(uri: str, session: aiohttp.ClientSession) -> bool:
 def _resolve_uri(uri: str) -> str:
     if uri.startswith("ipfs://"):
         return "https://ipfs.io/ipfs/" + uri[7:]
-    if uri.startswith("https://cf-ipfs.com/") or uri.startswith("https://ipfs.io/"):
-        return uri
     return uri
