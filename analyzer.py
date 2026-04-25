@@ -89,7 +89,7 @@ async def _get_creator_signatures(creator: str, session: aiohttp.ClientSession) 
     })
     try:
         async with session.post(
-            RPC_URL, content=payload,
+            RPC_URL, data=payload,
             headers={"Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=10),
         ) as r:
@@ -127,7 +127,7 @@ async def _extract_created_mints(
         ]
         try:
             async with session.post(
-                RPC_URL, content=orjson.dumps(rpc_batch),
+                RPC_URL, data=orjson.dumps(rpc_batch),
                 headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as r:

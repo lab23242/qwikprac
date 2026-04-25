@@ -145,7 +145,7 @@ async def fetch_bonding_curve(mint: Pubkey, session: aiohttp.ClientSession) -> O
     })
     try:
         async with session.post(
-            RPC_URL, content=payload,
+            RPC_URL, data=payload,
             headers={"Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=4),
         ) as r:
@@ -159,7 +159,7 @@ async def fetch_bonding_curve(mint: Pubkey, session: aiohttp.ClientSession) -> O
 async def _fetch_blockhash(session: aiohttp.ClientSession) -> Optional[str]:
     try:
         async with session.post(
-            RPC_URL, content=_BH_PAYLOAD,
+            RPC_URL, data=_BH_PAYLOAD,
             headers={"Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=5),
         ) as r:
@@ -184,7 +184,7 @@ async def _submit_rpc(tx_bytes: bytes, session: aiohttp.ClientSession) -> Option
     })
     try:
         async with session.post(
-            RPC_URL, content=payload,
+            RPC_URL, data=payload,
             headers={"Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=10),
         ) as r:
@@ -206,7 +206,7 @@ async def _submit_jito(tx_bytes: bytes, session: aiohttp.ClientSession) -> Optio
     payload = orjson.dumps({"jsonrpc": "2.0", "id": 1, "method": "sendBundle", "params": [[encoded]]})
     try:
         async with session.post(
-            JITO_BLOCK_ENGINE_URL, content=payload,
+            JITO_BLOCK_ENGINE_URL, data=payload,
             headers={"Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=8),
         ) as r:

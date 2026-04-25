@@ -128,7 +128,7 @@ class PaperTrader:
             })
             try:
                 async with session.post(
-                    RPC_URL, content=payload,
+                    RPC_URL, data=payload,
                     headers={"Content-Type": "application/json"},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as r:
