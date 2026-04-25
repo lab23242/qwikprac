@@ -19,7 +19,7 @@ from analyzer import get_dev_stats, has_social_media
 from trader import fetch_bonding_curve, BLOCKHASH_CACHE
 from pumpfun import CreateEvent
 from paper_trader import PaperTrader
-from notifier import notify, fmt_paper_buy, fmt_paper_sell, fmt_summary
+from notifier import notify, fmt_paper_buy, fmt_paper_sell
 
 PAPER_STARTING_BALANCE_SOL = float(os.getenv("PAPER_STARTING_BALANCE_SOL", "10.0"))
 SUMMARY_INTERVAL_SECONDS   = int(os.getenv("SUMMARY_INTERVAL_SECONDS",     "60"))
@@ -107,9 +107,6 @@ async def _position_updater(trader: PaperTrader, session: aiohttp.ClientSession)
 
         log.info("\n%s", trader.summary())
         trader.save_log()
-
-        s = trader.summary_for_telegram()
-        notify(session, fmt_summary(**s))
 
 
 async def _true() -> bool:
