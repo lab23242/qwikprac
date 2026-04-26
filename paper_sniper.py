@@ -99,9 +99,9 @@ async def _position_updater(trader: PaperTrader, session: aiohttp.ClientSession)
         closed = await trader.update_positions(session)
         for pos in closed:
             notify(session, fmt_paper_sell(
-                name=pos.name, symbol=pos.symbol,
+                name=pos.name, symbol=pos.symbol, mint=pos.mint,
                 pnl_sol=pos.pnl_sol, pnl_pct=pos.pnl_pct,
-                exit_value=pos.exit_value_sol, reason=pos.closed and "migrated" or "manual",
+                exit_value=pos.exit_value_sol, reason=pos.close_reason,
                 balance=trader.balance_sol,
             ))
 
@@ -123,7 +123,8 @@ async def main() -> None:
              f"{config.MAX_MARKET_CAP_SOL:.1f}" if config.MAX_MARKET_CAP_SOL > 0 else "∞")
     log.info("Summary interval : %ds | log: paper_trades.json", SUMMARY_INTERVAL_SECONDS)
 
-    trader    = PaperTrader(PAPER_STARTING_BALANCE_SOL, config.BUY_AMOUNT_SOL, config.SLIPPAGE)
+    trader    = PaperTrader(PAPER_STARTING_BALANCE_SOL, config.BUY_AMOUNT_SOL, config.SLIPPAGE,
+                            take_profit_multiple=config.TAKE_PROFIT_MULTIPLE)
     semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_SNIPES)
     pending: set[asyncio.Task] = set()
 

@@ -15,10 +15,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
+import base58
 import orjson
 
 from config import RPC_URL
-from pumpfun import PUMP_PROGRAM_ID, BondingCurve, get_bonding_curve_pda
+from pumpfun import PUMP_PROGRAM_ID, CREATE_DISCRIMINATOR, BondingCurve, get_bonding_curve_pda
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +146,11 @@ async def _extract_created_mints(
 
 
 def _extract_mint(tx: dict, creator: str) -> Optional[str]:
+    """
+    Return the mint pubkey if this transaction is a pump.fun create by `creator`.
+    Discriminator check prevents matching buy/sell instructions.
+    Mint is at account index 0 in the create instruction (not index 2 = bondingCurve).
+    """
     try:
         if tx.get("meta", {}).get("err"):
             return None
@@ -154,18 +160,30 @@ def _extract_mint(tx: dict, creator: str) -> Optional[str]:
         pump_str = str(PUMP_PROGRAM_ID)
         for ix in msg.get("instructions", []):
             if ix.get("programId") == pump_str:
-                accs = ix.get("accounts", [])
-                if len(accs) >= 3:
-                    return accs[2]
+                m = _check_create_ix(ix)
+                if m:
+                    return m
         for group in tx.get("meta", {}).get("innerInstructions", []):
             for ix in group.get("instructions", []):
                 if ix.get("programId") == pump_str:
-                    accs = ix.get("accounts", [])
-                    if len(accs) >= 3:
-                        return accs[2]
+                    m = _check_create_ix(ix)
+                    if m:
+                        return m
     except (KeyError, IndexError, TypeError):
         pass
     return None
+
+
+def _check_create_ix(ix: dict) -> Optional[str]:
+    """Return mint pubkey if ix is a pump.fun 'create' instruction, else None."""
+    try:
+        raw = base58.b58decode(ix.get("data", ""))
+        if len(raw) < 8 or raw[:8] != CREATE_DISCRIMINATOR:
+            return None
+        accs = ix.get("accounts", [])
+        return accs[0] if accs else None
+    except Exception:
+        return None
 
 
 async def _count_migrations_batch(mints: list[str], session: aiohttp.ClientSession) -> int:

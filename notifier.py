@@ -48,7 +48,7 @@ def fmt_paper_buy(name: str, symbol: str, mint: str, dev_rate: float,
     return (
         f"🎯 <b>PAPER BUY</b>\n"
         f"<b>Token:</b> {_esc(name)} (<code>{_esc(symbol)}</code>)\n"
-        f"<b>Mint:</b> <code>{mint[:16]}…</code>\n"
+        f"<b>Mint:</b> <code>{mint}</code>\n"
         f"<b>Dev:</b> migration {dev_rate:.0f}% | {dev_tokens} launched\n"
         f"<b>Spent:</b> {sol_spent:.4f} SOL | "
         f"<b>Tokens:</b> {token_amount / 1e6:,.2f}\n"
@@ -57,13 +57,14 @@ def fmt_paper_buy(name: str, symbol: str, mint: str, dev_rate: float,
     )
 
 
-def fmt_paper_sell(name: str, symbol: str, pnl_sol: float, pnl_pct: float,
+def fmt_paper_sell(name: str, symbol: str, mint: str, pnl_sol: float, pnl_pct: float,
                    exit_value: float, reason: str, balance: float) -> str:
     emoji = "🟢" if pnl_sol >= 0 else "🔴"
     sign  = "+" if pnl_sol >= 0 else ""
     return (
         f"{emoji} <b>PAPER SELL</b>\n"
         f"<b>Token:</b> {_esc(name)} (<code>{_esc(symbol)}</code>)\n"
+        f"<b>Mint:</b> <code>{mint}</code>\n"
         f"<b>P&amp;L:</b> {sign}{pnl_sol:.4f} SOL ({sign}{pnl_pct:.1f}%)\n"
         f"<b>Received:</b> {exit_value:.4f} SOL\n"
         f"<b>Reason:</b> {reason}\n"
@@ -76,7 +77,7 @@ def fmt_snipe_buy(name: str, symbol: str, mint: str, dev_rate: float,
     return (
         f"⚡ <b>SNIPE BUY</b>\n"
         f"<b>Token:</b> {_esc(name)} (<code>{_esc(symbol)}</code>)\n"
-        f"<b>Mint:</b> <code>{mint[:16]}…</code>\n"
+        f"<b>Mint:</b> <code>{mint}</code>\n"
         f"<b>Dev:</b> migration {dev_rate:.0f}% | {dev_tokens} launched\n"
         f"<b>Spent:</b> {sol_spent:.4f} SOL\n"
         f"<b>Sig:</b> <code>{sig[:20]}…</code>"

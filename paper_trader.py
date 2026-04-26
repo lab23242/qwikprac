@@ -37,6 +37,7 @@ class Position:
     pnl_pct: float = 0.0
     migrated: bool = False
     closed: bool = False
+    close_reason: str = ""
     exit_price_sol: float = 0.0
     exit_time: float = 0.0
     exit_value_sol: float = 0.0
@@ -56,11 +57,13 @@ class Trade:
 
 
 class PaperTrader:
-    def __init__(self, starting_balance_sol: float, buy_amount_sol: float, slippage: float):
-        self.balance_sol      = starting_balance_sol
-        self.starting_balance = starting_balance_sol
-        self.buy_amount_sol   = buy_amount_sol
-        self.slippage         = slippage
+    def __init__(self, starting_balance_sol: float, buy_amount_sol: float, slippage: float,
+                 take_profit_multiple: float = 0.0):
+        self.balance_sol          = starting_balance_sol
+        self.starting_balance     = starting_balance_sol
+        self.buy_amount_sol       = buy_amount_sol
+        self.slippage             = slippage
+        self.take_profit_multiple = take_profit_multiple
         self.positions:        dict[str, Position] = {}
         self.closed_positions: list[Position]      = []
         self.trades:           list[Trade]         = []
@@ -158,6 +161,10 @@ class PaperTrader:
                     pos.migrated = True
                     self._close_position(pos, "migrated (complete)")
                     closed_now.append(pos)
+                elif (self.take_profit_multiple > 0
+                      and pos.current_price_sol >= pos.entry_price_sol * self.take_profit_multiple):
+                    self._close_position(pos, f"take profit ({self.take_profit_multiple:.1f}×)")
+                    closed_now.append(pos)
 
         return closed_now
 
@@ -165,6 +172,7 @@ class PaperTrader:
         if pos.closed:
             return
         pos.closed          = True
+        pos.close_reason    = reason
         pos.exit_price_sol  = pos.current_price_sol
         pos.exit_time       = time.time()
         pos.exit_value_sol  = pos.current_price_sol * pos.token_amount

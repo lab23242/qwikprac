@@ -26,6 +26,7 @@ MIN_TOKENS_LAUNCHED  = int(os.getenv("MIN_TOKENS_LAUNCHED",    "3"))
 REQUIRE_SOCIAL       = os.getenv("REQUIRE_SOCIAL", "true").lower() == "true"
 MIN_MARKET_CAP_SOL   = float(os.getenv("MIN_MARKET_CAP_SOL",  "0"))
 MAX_MARKET_CAP_SOL   = float(os.getenv("MAX_MARKET_CAP_SOL",  "0"))
+TAKE_PROFIT_MULTIPLE = float(os.getenv("TAKE_PROFIT_MULTIPLE", "0"))  # 0 = disabled; 2.0 = sell at 2× entry
 
 # --- Buy parameters ---
 BUY_AMOUNT_SOL            = float(os.getenv("BUY_AMOUNT_SOL",           "0.1"))

@@ -33,7 +33,8 @@ JITO_TIP_ACCOUNTS = [
     Pubkey.from_string("3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT"),
 ]
 
-BUY_DISCRIMINATOR         = hashlib.sha256(b"global:buy").digest()[:8]
+BUY_DISCRIMINATOR          = hashlib.sha256(b"global:buy").digest()[:8]
+CREATE_DISCRIMINATOR       = hashlib.sha256(b"global:create").digest()[:8]
 CREATE_EVENT_DISCRIMINATOR = hashlib.sha256(b"event:CreateEvent").digest()[:8]
 
 
