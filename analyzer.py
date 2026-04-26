@@ -3,8 +3,9 @@ Developer analysis: migration rate + token count for a creator wallet,
 and social-media link check from token metadata URI.
 Results are TTL-cached to avoid redundant RPC calls on the critical path.
 
-Key fix: getSignaturesForAddress queries the CREATOR address (not the pump.fun
-program), then JSON-RPC batches getTransaction to find pump.fun creates.
+Historical creates are detected by decoding CreateEvent log messages from the
+creator's past transactions — the same mechanism the live monitor uses.
+This is robust to pump.fun program upgrades and wrapper programs.
 Migration checks use getMultipleAccounts (one round-trip per 100 tokens).
 """
 import asyncio
@@ -15,11 +16,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
-import base58
 import orjson
 
 from config import RPC_URL
-from pumpfun import PUMP_PROGRAM_ID, CREATE_DISCRIMINATOR, BondingCurve, get_bonding_curve_pda
+from pumpfun import BondingCurve, CreateEvent, CREATE_EVENT_DISCRIMINATOR, get_bonding_curve_pda
 
 log = logging.getLogger(__name__)
 
@@ -108,9 +108,13 @@ async def _get_creator_signatures(creator: str, session: aiohttp.ClientSession) 
 async def _extract_created_mints(
     creator: str, signatures: list[str], session: aiohttp.ClientSession
 ) -> list[str]:
-    """Batch-fetch transactions (JSON-RPC batch) and extract pump.fun create mints."""
+    """
+    Detect historical token creates by parsing CreateEvent log messages.
+    Uses the same mechanism as the live monitor — robust to pump.fun program
+    upgrades and wrapper programs that CPI into pump.fun.
+    """
     mints: list[str] = []
-    batch_size = 50  # keep request size manageable
+    batch_size = 50
 
     for i in range(0, min(len(signatures), 500), batch_size):
         batch = signatures[i:i + batch_size]
@@ -120,7 +124,7 @@ async def _extract_created_mints(
                 "method": "getTransaction",
                 "params": [
                     sig,
-                    {"encoding": "jsonParsed", "commitment": "confirmed",
+                    {"encoding": "json", "commitment": "confirmed",
                      "maxSupportedTransactionVersion": 0},
                 ],
             }
@@ -135,55 +139,24 @@ async def _extract_created_mints(
                 results = orjson.loads(await r.read())
                 for item in results:
                     tx = item.get("result")
-                    if tx:
-                        m = _extract_mint(tx, creator)
-                        if m:
-                            mints.append(m)
+                    if not tx or tx.get("meta", {}).get("err"):
+                        continue
+                    for log_line in tx.get("meta", {}).get("logMessages", []):
+                        if not log_line.startswith("Program data: "):
+                            continue
+                        try:
+                            data = base64.b64decode(log_line[len("Program data: "):])
+                            if len(data) < 8 or data[:8] != CREATE_EVENT_DISCRIMINATOR:
+                                continue
+                            event = CreateEvent.decode(data)
+                            if event and str(event.creator) == creator:
+                                mints.append(str(event.mint))
+                        except Exception:
+                            continue
         except Exception as exc:
             log.debug("batch getTransaction error: %s", exc)
 
     return mints
-
-
-def _extract_mint(tx: dict, creator: str) -> Optional[str]:
-    """
-    Return the mint pubkey if this transaction is a pump.fun create by `creator`.
-    Discriminator check prevents matching buy/sell instructions.
-    Mint is at account index 0 in the create instruction (not index 2 = bondingCurve).
-    """
-    try:
-        if tx.get("meta", {}).get("err"):
-            return None
-        msg = tx["transaction"]["message"]
-        if msg["accountKeys"][0]["pubkey"] != creator:
-            return None
-        pump_str = str(PUMP_PROGRAM_ID)
-        for ix in msg.get("instructions", []):
-            if ix.get("programId") == pump_str:
-                m = _check_create_ix(ix)
-                if m:
-                    return m
-        for group in tx.get("meta", {}).get("innerInstructions", []):
-            for ix in group.get("instructions", []):
-                if ix.get("programId") == pump_str:
-                    m = _check_create_ix(ix)
-                    if m:
-                        return m
-    except (KeyError, IndexError, TypeError):
-        pass
-    return None
-
-
-def _check_create_ix(ix: dict) -> Optional[str]:
-    """Return mint pubkey if ix is a pump.fun 'create' instruction, else None."""
-    try:
-        raw = base58.b58decode(ix.get("data", ""))
-        if len(raw) < 8 or raw[:8] != CREATE_DISCRIMINATOR:
-            return None
-        accs = ix.get("accounts", [])
-        return accs[0] if accs else None
-    except Exception:
-        return None
 
 
 async def _count_migrations_batch(mints: list[str], session: aiohttp.ClientSession) -> int:
