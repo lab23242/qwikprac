@@ -81,6 +81,7 @@ async def evaluate_and_snipe(
         sig = await snipe(
             keypair=keypair, mint=event.mint,
             bonding_curve=event.bonding_curve, bc_data=bc, session=session,
+            creator=event.creator,
         )
 
         if sig:

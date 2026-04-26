@@ -81,6 +81,7 @@ async def snipe(
     bonding_curve: Pubkey,
     bc_data: Optional[BondingCurve],
     session: aiohttp.ClientSession,
+    creator: Optional[Pubkey] = None,
 ) -> Optional[str]:
     blockhash = await BLOCKHASH_CACHE.get(session)
     if not blockhash:
@@ -96,6 +97,10 @@ async def snipe(
 
     max_sol_cost = int(sol_in * LAMPORTS_PER_SOL * (1 + SLIPPAGE))
 
+    if creator is None:
+        log.warning("snipe() called without creator — creator vault PDA will be wrong")
+        creator = keypair.pubkey()   # placeholder to avoid hard crash
+
     instructions: list[Instruction] = [
         set_compute_unit_price(PRIORITY_FEE_MICROLAMPORTS),
         set_compute_unit_limit(200_000),
@@ -105,6 +110,7 @@ async def snipe(
             bonding_curve=bonding_curve,
             token_amount=token_amount,
             max_sol_cost=max_sol_cost,
+            creator=creator,
         ),
     ]
 

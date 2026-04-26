@@ -12,11 +12,14 @@ from solders.instruction import AccountMeta, Instruction
 from solders.system_program import ID as SYS_PROGRAM_ID
 
 PUMP_PROGRAM_ID  = Pubkey.from_string("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P")
-PUMP_FEE_RECIPIENT = Pubkey.from_string("CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM")
+PUMP_FEE_RECIPIENT = Pubkey.from_string("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ")
 
-_TOKEN_PROGRAM = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+_TOKEN_PROGRAM_LEGACY = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+_TOKEN_PROGRAM = Pubkey.from_string("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
 _ATA_PROGRAM   = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bS4")
 RENT_SYSVAR    = Pubkey.from_string("SysvarRent111111111111111111111111111111111")
+
+BONDING_CURVE_CREATOR_OFFSET = 81
 
 # Computed once at import — never recomputed per call
 _GLOBAL_PDA, _         = Pubkey.find_program_address([b"global"],              PUMP_PROGRAM_ID)
@@ -110,11 +113,17 @@ def get_bonding_curve_pda(mint: Pubkey) -> Pubkey:
 
 
 def get_ata(wallet: Pubkey, mint: Pubkey) -> Pubkey:
-    """Derive Associated Token Account address without importing spl-token."""
+    """Derive Associated Token Account address (Token2022)."""
     pda, _ = Pubkey.find_program_address(
         [bytes(wallet), bytes(_TOKEN_PROGRAM), bytes(mint)],
         _ATA_PROGRAM,
     )
+    return pda
+
+
+def get_creator_vault_pda(creator: Pubkey) -> Pubkey:
+    """Derive the creator vault PDA: [b'creator-vault', bytes(creator)] with PUMP_PROGRAM_ID."""
+    pda, _ = Pubkey.find_program_address([b"creator-vault", bytes(creator)], PUMP_PROGRAM_ID)
     return pda
 
 
@@ -124,21 +133,22 @@ def build_buy_instruction(
     bonding_curve: Pubkey,
     token_amount: int,
     max_sol_cost: int,
+    creator: Pubkey,
 ) -> Instruction:
     data = BUY_DISCRIMINATOR + struct.pack("<QQ", token_amount, max_sol_cost)
     accounts = [
-        AccountMeta(pubkey=_GLOBAL_PDA,                          is_signer=False, is_writable=False),
-        AccountMeta(pubkey=PUMP_FEE_RECIPIENT,                   is_signer=False, is_writable=True),
-        AccountMeta(pubkey=mint,                                 is_signer=False, is_writable=False),
-        AccountMeta(pubkey=bonding_curve,                        is_signer=False, is_writable=True),
-        AccountMeta(pubkey=get_ata(bonding_curve, mint),         is_signer=False, is_writable=True),
-        AccountMeta(pubkey=get_ata(buyer, mint),                 is_signer=False, is_writable=True),
-        AccountMeta(pubkey=buyer,                                is_signer=True,  is_writable=True),
-        AccountMeta(pubkey=SYS_PROGRAM_ID,                       is_signer=False, is_writable=False),
-        AccountMeta(pubkey=_TOKEN_PROGRAM,                       is_signer=False, is_writable=False),
-        AccountMeta(pubkey=RENT_SYSVAR,                          is_signer=False, is_writable=False),
-        AccountMeta(pubkey=_EVENT_AUTH_PDA,                      is_signer=False, is_writable=False),
-        AccountMeta(pubkey=PUMP_PROGRAM_ID,                      is_signer=False, is_writable=False),
+        AccountMeta(pubkey=_GLOBAL_PDA,                          is_signer=False, is_writable=False),   # [0]
+        AccountMeta(pubkey=PUMP_FEE_RECIPIENT,                   is_signer=False, is_writable=True),    # [1]
+        AccountMeta(pubkey=mint,                                 is_signer=False, is_writable=False),   # [2]
+        AccountMeta(pubkey=bonding_curve,                        is_signer=False, is_writable=True),    # [3]
+        AccountMeta(pubkey=get_ata(bonding_curve, mint),         is_signer=False, is_writable=True),    # [4]
+        AccountMeta(pubkey=get_ata(buyer, mint),                 is_signer=False, is_writable=True),    # [5]
+        AccountMeta(pubkey=buyer,                                is_signer=True,  is_writable=True),    # [6]
+        AccountMeta(pubkey=SYS_PROGRAM_ID,                       is_signer=False, is_writable=False),   # [7]
+        AccountMeta(pubkey=_TOKEN_PROGRAM,                       is_signer=False, is_writable=False),   # [8] Token2022
+        AccountMeta(pubkey=get_creator_vault_pda(creator),       is_signer=False, is_writable=True),    # [9]
+        AccountMeta(pubkey=_EVENT_AUTH_PDA,                      is_signer=False, is_writable=False),   # [10]
+        AccountMeta(pubkey=PUMP_PROGRAM_ID,                      is_signer=False, is_writable=False),   # [11]
     ]
     return Instruction(program_id=PUMP_PROGRAM_ID, data=bytes(data), accounts=accounts)
 
